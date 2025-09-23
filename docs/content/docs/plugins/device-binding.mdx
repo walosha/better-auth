@@ -1,0 +1,640 @@
+# Device Binding
+
+The Device Binding plugin provides enhanced security by binding user sessions to specific devices, preventing unauthorized access even if credentials are compromised. It implements device fingerprinting, trust management, and phishing-resistant authentication flows.
+
+## Installation
+
+```bash
+npm install better-auth
+```
+
+## Setup
+
+Add the device binding plugin to your Better Auth configuration:
+
+```ts
+import { betterAuth } from "better-auth"
+import { deviceBinding } from "better-auth/plugins"
+
+export const auth = betterAuth({
+  database: {
+    // your database config
+  },
+  plugins: [
+    deviceBinding({
+      // optional configuration
+    })
+  ]
+})
+```
+
+## Configuration
+
+### Options
+
+The device binding plugin accepts the following configuration options:
+
+```ts
+interface DeviceBindingOptions {
+  /**
+   * Duration in days for how long a device remains trusted
+   * @default 30
+   */
+  trustDuration?: number;
+  
+  /**
+   * Maximum number of trusted devices per user
+   * @default 3
+   */
+  maxTrustedDevices?: number;
+  
+  /**
+   * Whether to require device verification for new devices
+   * @default true
+   */
+  requireDeviceVerification?: boolean;
+  
+  /**
+   * Custom device fingerprint generator
+   */
+  generateDeviceFingerprint?: (context: any) => Promise<string> | string;
+  
+  /**
+   * Enable automatic device registration on login
+   * @default false
+   */
+  autoRegisterDevice?: boolean;
+  
+  /**
+   * Block all new devices except for first-time users
+   * @default true
+   */
+  strictMode?: boolean;
+  
+  /**
+   * TOTP verification function for trusting devices
+   */
+  verifyTOTP?: (userId: string, code: string) => Promise<boolean>;
+  
+  /**
+   * OTP verification function for trusting devices
+   */
+  verifyOTP?: (userId: string, code: string) => Promise<boolean>;
+  
+  /**
+   * Send OTP function for device verification
+   */
+  sendOTP?: (userId: string, deviceInfo: DeviceInfo) => Promise<string>;
+}
+```
+
+### Example Configuration
+
+```ts
+export const auth = betterAuth({
+  database: {
+    // your database config
+  },
+  plugins: [
+    deviceBinding({
+      trustDuration: 30, // 30 days
+      maxTrustedDevices: 5,
+      requireDeviceVerification: true,
+      strictMode: true,
+      sendOTP: async (userId, deviceInfo) => {
+        // Send OTP via your preferred method
+        const otp = generateRandomOTP();
+        await sendEmail(userId, `Your device verification code: ${otp}`);
+        return otp;
+      }
+    })
+  ]
+})
+```
+
+## Database Schema
+
+The plugin automatically creates the following database tables:
+
+### DeviceBinding Table
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Primary key |
+| `userId` | string | Foreign key to user |
+| `deviceId` | string | Unique device identifier |
+| `deviceFingerprint` | string | Device fingerprint hash |
+| `deviceName` | string | Human-readable device name |
+| `trusted` | boolean | Whether device is trusted |
+| `trustedAt` | date | When device was trusted |
+| `lastSeenAt` | date | Last activity timestamp |
+| `createdAt` | date | Device registration date |
+| `expiresAt` | date | Trust expiration date |
+| `isFirstDevice` | boolean | Whether this is user's first device |
+
+### DeviceVerificationOTP Table
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | string | Primary key |
+| `userId` | string | Foreign key to user |
+| `deviceId` | string | Associated device ID |
+| `otp` | string | Hashed OTP code |
+| `verified` | boolean | Whether OTP was verified |
+| `attempts` | number | Failed verification attempts |
+| `createdAt` | date | OTP creation time |
+| `expiresAt` | date | OTP expiration time |
+
+## Client Usage
+
+### Setup Client
+
+```ts
+import { createAuthClient } from "better-auth/client"
+import { deviceBindingClient } from "better-auth/client/plugins"
+
+const client = createAuthClient({
+  plugins: [
+    deviceBindingClient({
+      autoRegisterDevice: false,
+      strictMode: true,
+      onDeviceVerificationRequired: async (data) => {
+        // Handle device verification UI
+        console.log("Device verification required:", data.message);
+      },
+      onOTPRequired: async (data) => {
+        // Handle OTP input UI
+        const otp = prompt("Enter OTP:");
+        // Verify OTP...
+      }
+    })
+  ]
+})
+```
+
+### Register Device
+
+```ts
+// Register device with OTP verification
+const result = await client.deviceBinding.register({
+  email: "user@example.com",
+  deviceInfo: {
+    userAgent: navigator.userAgent,
+    screenResolution: `${screen.width}x${screen.height}`,
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  },
+  step: "request" // First step: request OTP
+});
+
+// Verify OTP
+const verified = await client.deviceBinding.register({
+  email: "user@example.com",
+  step: "verify",
+  otp: "123456",
+  trustDevice: true
+});
+```
+
+### Trust Device
+
+```ts
+// Trust device using TOTP
+await client.deviceBinding.trust({
+  deviceId: "device-123",
+  totpCode: "123456"
+});
+
+// Trust device using OTP
+await client.deviceBinding.trust({
+  deviceId: "device-123", 
+  otpCode: "654321"
+});
+```
+
+### List Devices
+
+```ts
+const devices = await client.deviceBinding.list();
+console.log(devices);
+// {
+//   devices: [
+//     {
+//       deviceId: "device-123",
+//       deviceName: "Chrome Browser", 
+//       trusted: true,
+//       isCurrent: true,
+//       createdAt: "2024-01-01T00:00:00Z"
+//     }
+//   ]
+// }
+```
+
+### Remove Device
+
+```ts
+await client.deviceBinding.remove({
+  deviceId: "device-123"
+});
+```
+
+### Check Device Status
+
+```ts
+const status = await client.deviceBinding.status();
+console.log(status);
+// {
+//   deviceRegistered: true,
+//   trusted: true,
+//   deviceId: "device-123",
+//   isFirstDevice: false
+// }
+```
+
+## Helper Functions
+
+The plugin provides helper functions for manual device management:
+
+```ts
+import { deviceBindingHelpers } from "better-auth/client/plugins"
+
+// Register current device
+await deviceBindingHelpers.registerDevice(client, {
+  deviceName: "My Laptop",
+  isFirstDevice: true
+});
+
+// Trust device with 2FA
+await deviceBindingHelpers.trustDevice(
+  client,
+  "device-123", 
+  "123456", // verification code
+  true // is TOTP (false for OTP)
+);
+
+// Get current device fingerprint
+const fingerprint = deviceBindingHelpers.getCurrentDeviceFingerprint();
+```
+
+## Security Features
+
+### Device Fingerprinting
+
+The plugin generates unique device fingerprints using:
+
+- User agent string
+- Screen resolution
+- Timezone
+- Language preferences
+- Platform information
+- Hardware concurrency
+- Touch points
+- Color depth
+- Pixel ratio
+
+### Strict Mode
+
+When `strictMode` is enabled:
+
+- New devices are blocked by default
+- Only trusted devices can access accounts
+- First device is automatically trusted
+- Subsequent devices require verification
+
+### Trust Management
+
+- Devices expire after the configured trust duration
+- Maximum number of trusted devices is enforced
+- Untrusted devices can be promoted with 2FA
+- Device trust can be revoked at any time
+
+### Rate Limiting
+
+Built-in rate limiting protects against abuse:
+
+- Device registration: 3 requests per minute
+- Trust operations: 3 requests per minute
+- General endpoints: 15 requests per 10 seconds
+
+## Hooks and Middleware
+
+The plugin automatically integrates with authentication flows:
+
+### Login Hooks
+
+- Checks device trust status on login
+- Blocks untrusted devices in strict mode
+- Updates device last seen timestamp
+- Manages device binding cookies
+
+### Session Management
+
+- Validates device binding on each request
+- Refreshes device trust expiration
+- Clears sessions on untrusted devices
+
+## Error Handling
+
+### Common Error Codes
+
+| Code | Description | Solution |
+|------|-------------|----------|
+| `DEVICE_NOT_REGISTERED` | Current device not found | Register the device |
+| `DEVICE_NOT_TRUSTED` | Device exists but not trusted | Trust the device with 2FA |
+| `MAX_DEVICES_REACHED` | Too many trusted devices | Remove unused devices |
+| `INVALID_OTP` | OTP verification failed | Check code and retry |
+| `DEVICE_EXPIRED` | Device trust expired | Re-trust the device |
+
+### Error Response Example
+
+```json
+{
+  "error": "otp_verification_required",
+  "deviceVerificationRequired": true,
+  "isNewDevice": true,
+  "message": "Device verification required. Please verify this device using OTP.",
+  "deviceId": "device-123"
+}
+```
+
+## Integration Examples
+
+### With Two-Factor Authentication
+
+```ts
+import { betterAuth } from "better-auth"
+import { deviceBinding } from "better-auth/plugins"
+import { twoFactor } from "better-auth/plugins"
+
+export const auth = betterAuth({
+  plugins: [
+    twoFactor(),
+    deviceBinding({
+      // Use built-in TOTP verification
+      verifyTOTP: async (userId, code) => {
+        // This will use the twoFactor plugin automatically
+        return true;
+      }
+    })
+  ]
+})
+```
+
+### With Custom OTP Provider
+
+```ts
+import { deviceBinding } from "better-auth/plugins"
+import { sendSMS, sendEmail } from "./notifications"
+
+export const auth = betterAuth({
+  plugins: [
+    deviceBinding({
+      sendOTP: async (userId, deviceInfo) => {
+        const otp = Math.floor(100000 + Math.random() * 900000).toString();
+        
+        // Send via SMS or email based on user preference
+        const user = await getUser(userId);
+        if (user.prefersSMS) {
+          await sendSMS(user.phone, `Your verification code: ${otp}`);
+        } else {
+          await sendEmail(user.email, `Your verification code: ${otp}`);
+        }
+        
+        return otp;
+      }
+    })
+  ]
+})
+```
+
+## Advanced Usage
+
+### Custom Device Fingerprinting
+
+```ts
+import { deviceBinding } from "better-auth/plugins"
+import { createHash } from "crypto"
+
+export const auth = betterAuth({
+  plugins: [
+    deviceBinding({
+      generateDeviceFingerprint: async (context) => {
+        const headers = context.headers;
+        const clientIP = headers.get("x-forwarded-for") || "unknown";
+        const userAgent = headers.get("user-agent") || "";
+        
+        // Create custom fingerprint
+        const fingerprint = `${clientIP}-${userAgent}-${Date.now()}`;
+        const hash = createHash("sha256").update(fingerprint).digest("hex");
+        
+        return hash;
+      }
+    })
+  ]
+})
+```
+
+### React Integration
+
+```tsx
+import { useDeviceBinding } from "./hooks/useDeviceBinding"
+
+function DeviceManagement() {
+  const { devices, trustDevice, removeDevice, isLoading } = useDeviceBinding();
+  
+  return (
+    <div>
+      <h2>Trusted Devices</h2>
+      {devices?.map(device => (
+        <div key={device.deviceId}>
+          <span>{device.deviceName}</span>
+          {device.trusted ? (
+            <button onClick={() => removeDevice(device.deviceId)}>
+              Remove
+            </button>
+          ) : (
+            <button onClick={() => trustDevice(device.deviceId)}>
+              Trust
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+```
+
+### Custom Hook Example
+
+```ts
+import { useState, useEffect } from "react"
+import { client } from "./auth-client"
+
+export function useDeviceBinding() {
+  const [devices, setDevices] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  
+  useEffect(() => {
+    loadDevices();
+  }, []);
+  
+  const loadDevices = async () => {
+    setIsLoading(true);
+    try {
+      const result = await client.deviceBinding.list();
+      setDevices(result.devices);
+    } catch (error) {
+      console.error("Failed to load devices:", error);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  const trustDevice = async (deviceId: string, totpCode: string) => {
+    try {
+      await client.deviceBinding.trust({ deviceId, totpCode });
+      await loadDevices(); // Refresh list
+    } catch (error) {
+      console.error("Failed to trust device:", error);
+    }
+  };
+  
+  const removeDevice = async (deviceId: string) => {
+    try {
+      await client.deviceBinding.remove({ deviceId });
+      await loadDevices(); // Refresh list
+    } catch (error) {
+      console.error("Failed to remove device:", error);
+    }
+  };
+  
+  return {
+    devices,
+    trustDevice,
+    removeDevice,
+    isLoading,
+    refresh: loadDevices
+  };
+}
+```
+
+## Migration Guide
+
+### Existing Users
+
+For applications with existing users, consider this migration strategy:
+
+1. **Gradual Rollout**: Start with `strictMode: false` and `autoRegisterDevice: true`
+2. **Notification Period**: Notify users about the new security feature
+3. **Enforcement**: After a grace period, enable `strictMode: true`
+
+```ts
+// Phase 1: Soft rollout
+deviceBinding({
+  strictMode: false,
+  autoRegisterDevice: true,
+  requireDeviceVerification: false
+})
+
+// Phase 2: After user notification
+deviceBinding({
+  strictMode: true,
+  autoRegisterDevice: true,
+  requireDeviceVerification: true
+})
+```
+
+### Database Migration
+
+If you need to migrate existing users:
+
+```sql
+-- Add device binding fields to existing users
+ALTER TABLE user ADD COLUMN device_binding_enabled BOOLEAN DEFAULT TRUE;
+ALTER TABLE user ADD COLUMN has_registered_device BOOLEAN DEFAULT FALSE;
+
+-- Auto-register devices for active sessions
+-- This should be done programmatically based on your session data
+```
+
+## Troubleshooting
+
+### Device Not Recognized
+
+If users frequently see "device not recognized" errors:
+
+1. Check if cookies are enabled
+2. Verify fingerprinting stability
+3. Consider less strict fingerprinting
+4. Increase `trustDuration`
+
+### OTP Not Received
+
+Common OTP delivery issues:
+
+1. Check spam folders
+2. Verify email/SMS provider configuration
+3. Implement retry mechanisms
+4. Add delivery status tracking
+
+### Performance Considerations
+
+- Device fingerprinting adds ~10-20ms per request
+- Database queries are optimized with indexes
+- Consider caching device status for high-traffic apps
+- Rate limiting prevents abuse
+
+## Security Considerations
+
+### Best Practices
+
+1. **Regular Cleanup**: Remove expired devices periodically
+2. **Audit Logging**: Log device trust changes
+3. **User Notification**: Notify users of new device registrations
+4. **Backup Codes**: Provide alternative access methods
+5. **Privacy**: Hash sensitive fingerprint data
+
+### Limitations
+
+- Device fingerprinting can change with browser updates
+- Users may lose access if all devices are lost
+- Fingerprinting may be less reliable in incognito mode
+- Some users may find it inconvenient
+
+## API Reference
+
+### Server Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/device-binding/register` | POST | Register new device |
+| `/device-binding/trust` | POST | Trust a device |
+| `/device-binding/list` | GET | List user devices |
+| `/device-binding/remove` | POST | Remove device |
+| `/device-binding/status` | GET | Check device status |
+
+### Types
+
+```ts
+interface DeviceInfo {
+  userAgent?: string;
+  screenResolution?: string;
+  timezone?: string;
+  language?: string;
+  platform?: string;
+  deviceId?: string;
+}
+
+interface TrustedDevice {
+  deviceId: string;
+  deviceName: string;
+  trusted: boolean;
+  trustedAt?: Date;
+  lastSeenAt: Date;
+  createdAt: Date;
+  expiresAt?: Date;
+  isFirstDevice: boolean;
+  isCurrent: boolean;
+}
+```
+
+This plugin provides a robust foundation for device-based security while maintaining a good user experience. It's particularly valuable for applications handling sensitive data or requiring high security standards.
