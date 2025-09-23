@@ -177,6 +177,31 @@ export const deviceBindingHelpers = {
   },
 
   /**
+   * Quick register with OTP (unprotected)
+   */
+  async quickRegisterWithOTP(
+    client: any,
+    data: {
+      email: string;
+      step: "request" | "verify";
+      otp?: string;
+      deviceName?: string;
+      trustDevice?: boolean;
+      deviceInfo?: DeviceInfo;
+    }
+  ) {
+    const deviceInfo = data.deviceInfo ?? generateDeviceInfo();
+    
+    return await client.$fetch("/device-binding/quick-register", {
+      method: "POST",
+      body: {
+        ...data,
+        deviceInfo,
+      },
+    });
+  },
+
+  /**
    * Request OTP for device verification
    */
   async requestDeviceOTP(

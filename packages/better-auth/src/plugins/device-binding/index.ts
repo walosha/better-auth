@@ -254,6 +254,195 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
           });
         }
       ),
+      quickRegisterWithOTP: createAuthEndpoint(
+        "/device-binding/quick-register",
+        {
+          method: "POST",
+          body: z.object({
+            email: z.string().email(),
+            deviceInfo: z.object({
+              userAgent: z.string().optional(),
+              screenResolution: z.string().optional(),
+              timezone: z.string().optional(),
+              language: z.string().optional(),
+              platform: z.string().optional(),
+              cookiesEnabled: z.boolean().optional(),
+              doNotTrack: z.boolean().optional(),
+              hardwareConcurrency: z.number().optional(),
+              maxTouchPoints: z.number().optional(),
+              colorDepth: z.number().optional(),
+              pixelRatio: z.number().optional(),
+              canvas: z.string().optional(),
+              webgl: z.string().optional(),
+            }).optional(),
+            step: z.enum(["request", "verify"]),
+            otp: z.string().optional(),
+            deviceName: z.string().optional(),
+            trustDevice: z.boolean().optional(),
+          }),
+          metadata: {
+            openapi: {
+              summary: "Quick device registration with OTP",
+              description: "Register device using email OTP verification (unprotected)",
+            },
+          },
+        },
+        async (ctx) => {
+          const { email, deviceInfo, step, otp, deviceName, trustDevice } = ctx.body;
+          
+          // Find user
+          const user = await ctx.context.adapter.findOne<User>({
+            model: "user",
+            where: [{ field: "email", value: email }],
+          });
+          
+          if (!user) {
+            throw new APIError("NOT_FOUND", { message: "User not found" });
+          }
+          
+          const deviceFingerprint = await opts.generateDeviceFingerprint(ctx);
+          
+          if (step === "request") {
+            // Clean up expired OTPs
+            await ctx.context.adapter.delete({
+              model: opts.otpTable,
+              where: [
+                { field: "userId", value: user.id },
+                { field: "expiresAt", value: new Date(), operator: "lt" },
+              ],
+            });
+            
+            // Generate and send OTP
+            const deviceId = generateRandomString(32);
+            const otpCode = await opts.sendOTP(user.id, deviceInfo || {});
+            
+            // Store OTP
+            const hashedOTP = await createHash("SHA-256").digest(new TextEncoder().encode(otpCode));
+            await ctx.context.adapter.create({
+              model: opts.otpTable,
+              data: {
+                id: generateRandomString(32),
+                userId: user.id,
+                deviceId,
+                otp: base64Url.encode(new Uint8Array(hashedOTP)),
+                verified: false,
+                attempts: 0,
+                createdAt: new Date(),
+                expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 minutes
+              },
+            });
+            
+            return ctx.json({
+              success: true,
+              deviceId,
+              message: "OTP sent to your email",
+              expiresIn: 600,
+            });
+          } else if (step === "verify" && otp) {
+            // Verify OTP and register device
+            const hashedOTP = await createHash("SHA-256").digest(new TextEncoder().encode(otp));
+            const hashedOTPString = base64Url.encode(new Uint8Array(hashedOTP));
+            
+            const otpRecord = await ctx.context.adapter.findOne<DeviceVerificationOTP>({
+              model: opts.otpTable,
+              where: [
+                { field: "userId", value: user.id },
+                { field: "otp", value: hashedOTPString },
+                { field: "verified", value: false },
+              ],
+            });
+            
+            if (!otpRecord || otpRecord.expiresAt < new Date() || otpRecord.attempts >= 5) {
+              throw new APIError("BAD_REQUEST", { message: "Invalid or expired OTP" });
+            }
+            
+            // Mark OTP as verified
+            await ctx.context.adapter.update({
+              model: opts.otpTable,
+              where: [{ field: "id", value: otpRecord.id }],
+              update: { verified: true },
+            });
+            
+            // Check if this is the first device
+            const existingDevicesCount = await ctx.context.adapter.count({
+              model: opts.deviceBindingTable,
+              where: [{ field: "userId", value: user.id }],
+            });
+            
+            const isFirstDevice = existingDevicesCount === 0;
+            const shouldTrust = trustDevice || isFirstDevice;
+            
+            // Create device
+            const deviceId = generateRandomString(32);
+            const newDevice = await ctx.context.adapter.create({
+              model: opts.deviceBindingTable,
+              data: {
+                id: generateRandomString(32),
+                userId: user.id,
+                deviceId,
+                deviceFingerprint,
+                deviceName: deviceName || generateDeviceName(deviceInfo),
+                trusted: shouldTrust,
+                trustedAt: shouldTrust ? new Date() : null,
+                lastSeenAt: new Date(),
+                createdAt: new Date(),
+                expiresAt: shouldTrust 
+                  ? new Date(Date.now() + opts.trustDuration * 24 * 60 * 60 * 1000)
+                  : null,
+                isFirstDevice,
+              },
+            });
+            
+            // Update user if first device
+            if (isFirstDevice) {
+              await ctx.context.adapter.update({
+                model: "user",
+                where: [{ field: "id", value: user.id }],
+                update: { hasRegisteredDevice: true },
+              });
+            }
+            
+            // Create session
+            const session = await ctx.context.internalAdapter.createSession(
+              user.id,
+              ctx,
+              false
+            );
+            
+            // Set cookies
+            if (shouldTrust) {
+              await setDeviceBindingCookie(ctx, deviceId, deviceFingerprint);
+            }
+            
+            const sessionCookie = ctx.context.createAuthCookie("better-auth.session_token");
+            await ctx.setSignedCookie(
+              sessionCookie.name,
+              session.token,
+              ctx.context.secret,
+              sessionCookie.attributes
+            );
+            
+            return ctx.json({
+              success: true,
+              deviceId: newDevice.deviceId,
+              trusted: newDevice.trusted,
+              isFirstDevice,
+              user: {
+                id: user.id,
+                email: user.email,
+                name: user.name,
+              },
+              session: {
+                token: session.token,
+                expiresAt: session.expiresAt,
+              },
+            });
+          } else {
+            throw new APIError("BAD_REQUEST", { message: "Invalid step or missing OTP" });
+          }
+        }
+      ),
+
 
       /**
        * Request OTP for device verification
@@ -925,6 +1114,11 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
                 isNewDevice: !existingDevice,
                 deviceId: existingDevice?.deviceId,
                 message: "Device verification required. Please verify this device using OTP.",
+                endpoints: {
+                  requestOTP: "/device-binding/request-otp",
+                  verifyOTP: "/device-binding/verify-otp",
+                  quickRegister: "/device-binding/quick-register",
+                },
               });
             }
           }),
@@ -948,6 +1142,14 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
         },
         window: 60,
         max: 3, // Strict rate limit for OTP requests
+      },
+      {
+        pathMatcher(path) {
+          return path === "/device-binding/register-first" || 
+                 path === "/device-binding/quick-register";
+        },
+        window: 60,
+        max: 3, // Strict rate limit for unprotected registration
       },
       {
         pathMatcher(path) {

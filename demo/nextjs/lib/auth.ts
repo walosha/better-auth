@@ -142,34 +142,46 @@ export const auth = betterAuth({
 	plugins: [
 		openAPI(),
    // Device binding plugin
-   deviceBinding({
-	// Trust devices for 30 days
+   twoFactor({
+	issuer: "YourApp",
+  }),
+  
+  // Device binding with strict security
+  deviceBinding({
+	// Strict mode: Users can't sign in on new devices without verification
+	strictMode: true,
+	
+	// Duration in days for how long a device remains trusted
 	trustDuration: 30,
 	
-	// Allow up to 5 trusted devices per user
-	maxTrustedDevices: 5,
+	// Maximum number of trusted devices per user
+	maxTrustedDevices: 3,
 	
 	// Require device verification for new devices
 	requireDeviceVerification: true,
 	
-	// Auto-register devices on login
-	autoRegisterDevice: true,
+	// Don't auto-register devices (strict mode)
+	autoRegisterDevice: false,
 	
-	// Custom 2FA verification (integrates with the two-factor plugin)
-	// verifyTOTP: async (userId: string, code: string) => {
-	//   try {
-	// 	// This would integrate with your 2FA verification logic
-	// 	const result = await auth.api.verifyTotp({
-	// 	  body: { code },
-	// 	  headers: new Headers(),
-	// 	  // You'd need to get the user's session context here
-	// 	});
-	// 	return result.success;
-	//   } catch {
-	// 	return false;
-	//   }
-	// },
-  }),		organization({
+	// Custom OTP sender function
+	sendOTP: async (userId: string, deviceInfo: any) => {
+	  // Send email with device info
+	  const otp = Math.floor(100000 + Math.random() * 900000).toString()
+
+	   console.log({
+	userId, deviceInfo
+	  });
+	  
+	  return otp;
+	},
+	
+	// Custom 2FA verification for device trusting
+	//verifyTOTP: async (userId: string, code: string) => {
+	  // Integrate with your existing 2FA system
+	 // return await verify2FACode(userId, code);
+	//},
+  }),
+  		organization({
 			async sendInvitationEmail(data) {
 				await resend.emails.send({
 					from,
