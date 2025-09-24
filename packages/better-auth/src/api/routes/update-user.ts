@@ -519,8 +519,8 @@ export const deleteUser = createAuthEndpoint(
 		if (beforeDelete) {
 			await beforeDelete(session.user, ctx.request);
 		}
-		await ctx.context.internalAdapter.deleteUser(session.user.id);
-		await ctx.context.internalAdapter.deleteSessions(session.user.id);
+		await ctx.context.internalAdapter.deleteUser(session.user.id, ctx);
+		await ctx.context.internalAdapter.deleteSessions(session.user.id, ctx);
 		await ctx.context.internalAdapter.deleteAccounts(session.user.id);
 		deleteSessionCookie(ctx);
 		const afterDelete = ctx.context.options.user.deleteUser?.afterDelete;
@@ -607,10 +607,10 @@ export const deleteUserCallback = createAuthEndpoint(
 		if (beforeDelete) {
 			await beforeDelete(session.user, ctx.request);
 		}
-		await ctx.context.internalAdapter.deleteUser(session.user.id);
-		await ctx.context.internalAdapter.deleteSessions(session.user.id);
+		await ctx.context.internalAdapter.deleteUser(session.user.id, ctx);
+		await ctx.context.internalAdapter.deleteSessions(session.user.id, ctx);
 		await ctx.context.internalAdapter.deleteAccounts(session.user.id);
-		await ctx.context.internalAdapter.deleteVerificationValue(token.id);
+		await ctx.context.internalAdapter.deleteVerificationValue(token.id, ctx);
 
 		deleteSessionCookie(ctx);
 
@@ -634,6 +634,7 @@ export const changeEmail = createAuthEndpoint(
 		method: "POST",
 		body: z.object({
 			newEmail: z
+				.string()
 				.email()
 				.describe("The new email address to set must be a valid email address"),
 			callbackURL: z
