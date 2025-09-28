@@ -5,14 +5,7 @@ export interface DeviceInfo {
   timezone?: string;
   language?: string;
   platform?: string;
-  cookiesEnabled?: boolean;
-  doNotTrack?: boolean;
-  hardwareConcurrency?: number;
-  maxTouchPoints?: number;
-  colorDepth?: number;
-  pixelRatio?: number;
-  canvas?: string;
-  webgl?: string;
+  deviceId?: string;
 }
 
 export interface DeviceBindingOptions {
