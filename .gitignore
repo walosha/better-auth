@@ -197,3 +197,10 @@ android/
 
 playwright-report/
 test-results/
+
+
+# Ignore kluster.ai Verify Code rules
+.github/instructions/kluster-code-verify.instructions.md
+
+
+.kluster

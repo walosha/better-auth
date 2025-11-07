@@ -380,10 +380,28 @@ export const phoneNumber = (options?: PhoneNumberOptions) => {
 						});
 					}
 
+						const user = await ctx.context.adapter.findOne<UserWithPhoneNumber>({
+						model: "user",
+						where: [
+							{
+								field: "phoneNumber",
+								value: ctx.body.phoneNumber,
+							},
+						],
+					   });
+
+					   if (user) {
+						throw new APIError("UNAUTHORIZED", {
+							message: ERROR_CODES.PHONE_NUMBER_EXIST,
+						});
+					  }
+
 					if (opts.phoneNumberValidator) {
 						const isValidNumber = await opts.phoneNumberValidator(
 							ctx.body.phoneNumber,
 						);
+
+						
 						if (!isValidNumber) {
 							throw new APIError("BAD_REQUEST", {
 								message: ERROR_CODES.INVALID_PHONE_NUMBER,

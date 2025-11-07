@@ -82,8 +82,6 @@ export const deviceBindingClient = (options?: {
     id: "device-binding",
     pathMethods: {
       "/device-binding/register": "POST",
-      "/device-binding/request-otp": "POST",
-      "/device-binding/verify-otp": "POST",
       "/device-binding/trust": "POST",
       "/device-binding/list": "GET",
       "/device-binding/remove": "POST",

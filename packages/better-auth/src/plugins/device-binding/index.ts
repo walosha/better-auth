@@ -38,9 +38,10 @@ async function defaultDeviceFingerprinting(context: GenericEndpointContext, opts
     screenResolution: safeGet(deviceInfo.screenResolution),
     timezone: safeGet(deviceInfo.timezone),
     language: safeGet(deviceInfo.language),
-    platform: opts?.platform || safeGet(deviceInfo.platform),
+    platform: opts?.platform || safeGet(deviceInfo.platform?.toLowerCase()),
     deviceId: opts?.deviceId || safeGet(deviceInfo.deviceId),
   };
+
   // Remove null values to normalize fingerprint
   const cleanedData = Object.fromEntries(
     Object.entries(fingerprintData).filter(([_, value]) => value !== null)
@@ -121,6 +122,7 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
     autoRegisterDevice: options?.autoRegisterDevice ?? false,
     strictMode: options?.strictMode ?? true,
     deviceBindingTable: options?.deviceBindingTable || "deviceBinding",
+    devicesTable: options?.devicesTable || "devices",
     otpTable: options?.otpTable || "deviceVerificationOTP",
     sendOTP: options?.sendOTP || defaultSendOTP,
   };
@@ -136,7 +138,7 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
         {
           method: "POST",
           body: z.object({
-            email: z.email(),
+            identity: z.string(),
             deviceInfo: z.object({
               userAgent: z.string().optional(),
               screenResolution: z.string().optional(),
@@ -158,12 +160,27 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
           },
         },
         async (ctx) => {
-          const { email, deviceInfo, step, otp, deviceName, trustDevice } = ctx.body;
-          
-          // Find user
+          const { identity, deviceInfo, step, otp, deviceName, trustDevice } = ctx.body;
+
+          const getIdentityFilter = (identity: string) => {
+          const isEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(identity);
+          const isPhone = /^\+?[\d\s\-()]{10,}$/.test(identity);
+    
+           if (isEmail) {
+           return { field: "email", value: identity };
+           } else if (isPhone) {
+           return { field: "phoneNumber", value: identity };
+           } else {
+             throw new Error("Invalid email or phone number");
+           }
+          };
+           
+           // Find user by email or phone
+            const identityFilter = getIdentityFilter(identity);
+
           const user = await ctx.context.adapter.findOne<User>({
             model: "user",
-            where: [{ field: "email", value: email }],
+            where: [identityFilter],
           });
           
           if (!user) {
@@ -535,6 +552,38 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
     },
     
     hooks: {
+        before: [
+    {
+      matcher(context) {
+        return context.path === "/sign-out" && context.method === "POST";
+      },
+      handler: createAuthMiddleware(async (ctx) => {
+        const session = ctx.context.session;
+        console.log('Device Binding Plugin: Sign-out hook triggered', session);
+        if (session?.user?.id) {
+          console.log('Sign-out detected for user:', session.user.id);
+          
+          try {
+            // Delete all devices
+            await ctx.context.adapter.deleteMany({
+              model: opts.deviceBindingTable,
+              where: [{ field: "userId", value: session.user.id }],
+            });
+            
+            // Delete all verification OTPs
+            await ctx.context.adapter.deleteMany({
+              model: opts.otpTable,
+              where: [{ field: "userId", value: session.user.id }],
+            });
+            
+            console.log('Deleted all devices for user:', session.user.id);
+          } catch (error) {
+            console.error('Error deleting devices on logout:', error);
+          }
+        }
+      }),
+    },
+  ],
       after: [
         {
           matcher(context) {
@@ -573,7 +622,7 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
             // Check cookie-based trust first
             if (deviceBindingCookie) {
               const [deviceId, fingerprint] = deviceBindingCookie.split("!");
-
+              console.log("Device Binding Cookie Found:", { deviceId, fingerprint, currentFingerprint });
               if (fingerprint === currentFingerprint) {
                 trustedDevice = await ctx.context.adapter.findOne<DeviceBinding>({
                   model: opts.deviceBindingTable,
@@ -588,7 +637,6 @@ export const deviceBinding = (options?: DeviceBindingOptions) => {
                 // Check expiration
                 if (trustedDevice && trustedDevice.expiresAt && new Date() > new Date(trustedDevice.expiresAt)) {
                   trustedDevice = null;
-                  // Clear expired cookie
                    ctx.setCookie(deviceBindingCookieName.name, "", { maxAge: 0 });
                 }
               }

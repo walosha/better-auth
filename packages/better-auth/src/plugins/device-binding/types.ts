@@ -54,6 +54,8 @@ export interface DeviceBindingOptions {
    * OTP table name for device verification
    * @default "deviceVerificationOTP"
    */
+
+  devicesTable?: string;
   otpTable?: string;
   /**
    * Block all new devices except first-time users
